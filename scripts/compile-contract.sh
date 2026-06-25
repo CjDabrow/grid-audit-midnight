@@ -11,9 +11,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 SRC="src/contract/registry.compact"
 OUT="src/contract/managed/registry"
 
-echo "→ compiling $SRC"
+echo "→ compiling $SRC (compiler 0.31 for language 0.23)"
 rm -rf "$OUT"
-compact compile "$SRC" "$OUT"
+compact compile +0.31.0 "$SRC" "$OUT"
 
 echo "→ staging zk keys to public/zk"
 rm -rf public/zk

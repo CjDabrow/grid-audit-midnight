@@ -62,7 +62,7 @@ export circuit publishReceipt(receiptId: Bytes<32>): [] {
   ```bash
   curl --proto '=https' --tlsv1.2 -LsSf \
     https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
-  compact update            # installs the latest compiler (this project uses language 0.23 → compiler 0.31)
+  compact update 0.31.0     # this project uses Compact language 0.23 → compiler 0.31.0
   # ensure ~/.local/bin is on PATH (the installer prints how)
   ```
 
