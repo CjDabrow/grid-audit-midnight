@@ -1,0 +1,58 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&family=Press+Start+2P&display=swap");
+@import "tailwindcss";
+
+/* ── Grid Audit theme (cloned from the platform for a 1:1 vibe) ──────────────
+   Plain @theme with literal values so Tailwind v4 generates the utilities
+   (bg-grid-bg, text-grid-accent, font-mono, rounded-sm, text-sev-critical, …). */
+@theme {
+  --color-grid-bg: #080808;
+  --color-grid-bg-2: #0e0e0e;
+  --color-grid-bg-3: #141414;
+  --color-grid-border: #1e1e1e;
+  --color-grid-border-2: #2a2a2a;
+  --color-grid-text: #f2f2f2;
+  --color-grid-text-2: #999999;
+  --color-grid-text-3: #555555;
+  --color-grid-accent: #ffe600;
+  --color-grid-accent-dim: rgba(255, 230, 0, 0.08);
+  --color-grid-accent-glow: rgba(255, 230, 0, 0.15);
+
+  --color-sev-critical: #ff4d4d;
+  --color-sev-high: #ff8a3d;
+  --color-sev-medium: #ffe600;
+  --color-sev-low: #3b82f6;
+  --color-sev-info: #10b981;
+
+  --font-sans: "Space Grotesk", sans-serif;
+  --font-mono: "Space Mono", monospace;
+  --font-pixel: "Press Start 2P", monospace;
+
+  --radius-sm: 2px;
+  --radius-default: 4px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+}
+
+/* non-Tailwind vars used directly via style={{…}} */
+:root {
+  --radius: 4px;
+  --nav-h: 72px;
+  --max-w: 1200px;
+}
+
+body {
+  background: var(--color-grid-bg);
+  color: var(--color-grid-text);
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: var(--color-grid-accent);
+  color: #000;
+}
+
+@keyframes gridVerifiedGlow {
+  0%, 100% { box-shadow: 0 0 6px 0 rgba(16, 185, 129, 0.15); }
+  50%      { box-shadow: 0 0 11px 1px rgba(16, 185, 129, 0.38); }
+}
+.grid-verified-glow { animation: gridVerifiedGlow 2.6s ease-in-out infinite; }

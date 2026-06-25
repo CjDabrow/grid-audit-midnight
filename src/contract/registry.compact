@@ -1,0 +1,41 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Grid Audit Registry — a privacy-preserving on-chain attestation registry.
+//
+// Privacy features demonstrated (NOT a disclose-everything contract):
+//   - `auditorSecret` is a WITNESS (private input). It is hashed in-circuit and compared
+//     to an on-chain COMMITMENT for access control. The secret itself is NEVER disclosed,
+//     so only the holder of the secret can publish, and observers learn nothing about it.
+//   - `reportFingerprint` is a WITNESS. Only its COMMITMENT (a hash) is made public; the
+//     fingerprint of the audited report stays private to the prover.
+
+// Public ledger state.
+export ledger ownerCommitment: Bytes<32>;            // H(auditorSecret) — set once at deploy
+export ledger receipts: Map<Bytes<32>, Bytes<32>>;   // receiptId -> H(reportFingerprint)
+export ledger published: Counter;
+
+// Private inputs (witnesses) — supplied by the prover, never written to the ledger in clear.
+witness auditorSecret(): Bytes<32>;
+witness reportFingerprint(): Bytes<32>;
+
+// Bind the registry to the auditor's secret at deploy. Stores only the commitment H(secret),
+// never the secret. disclose() here applies only to the public hash, not the witness value.
+constructor() {
+  ownerCommitment = disclose(persistentHash<Bytes<32>>(auditorSecret()));
+}
+
+// Publish an audit receipt. Proves knowledge of the auditor secret (access control by
+// secret-knowledge, the canonical Midnight pattern) WITHOUT revealing it, and records a
+// commitment to the private report fingerprint.
+export circuit publishReceipt(receiptId: Bytes<32>): [] {
+  // Access control: re-derive H(secret) in-circuit and require it to match the commitment.
+  // The witness is consumed by the hash and never disclosed.
+  assert(persistentHash<Bytes<32>>(auditorSecret()) == ownerCommitment, "not the auditor");
+
+  assert(!receipts.member(disclose(receiptId)), "receipt already exists");
+
+  // Only the commitment to the private report fingerprint is disclosed/stored.
+  receipts.insert(disclose(receiptId), disclose(persistentHash<Bytes<32>>(reportFingerprint())));
+  published.increment(1);
+}
