@@ -1,5 +1,7 @@
 # Grid Audit: review your Midnight code, then certify it on-chain
 
+> This project is built on the Midnight Network.
+
 Grid Audit reviews **Midnight code** (Compact contracts, proof-server config, and dApp/SDK
 source) and tells you whether it is sound: it flags the privacy and security traps specific
 to Midnight, each with a severity and a fix. You then get a **verdict** for the code.
