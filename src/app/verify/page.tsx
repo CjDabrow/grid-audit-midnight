@@ -3,14 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { BracketLabel, Button, Card, SectionLabel } from "@/components/ui";
-import {
-  computeReportHash,
-  computeReportId,
-  computeCommitment,
-  type Receipt,
-} from "@/midnight/receipt";
+import { computeReportHash, computeReportId, type Receipt } from "@/midnight/receipt";
 
 type Status = "idle" | "ok" | "fail" | "error";
+type ChainStatus = "idle" | "ok" | "fail" | "error";
 
 export default function Verify() {
   const [receiptText, setReceiptText] = useState("");
@@ -18,13 +14,24 @@ export default function Verify() {
   const [status, setStatus] = useState<Status>("idle");
   const [detail, setDetail] = useState<string[]>([]);
 
+  // on-chain check
+  const [chainStatus, setChainStatus] = useState<ChainStatus>("idle");
+  const [chainDetail, setChainDetail] = useState<string[]>([]);
+  const [chainBusy, setChainBusy] = useState(false);
+
+  function parseReceipt(): Receipt | null {
+    try {
+      return JSON.parse(receiptText) as Receipt;
+    } catch {
+      return null;
+    }
+  }
+
   async function verify() {
     setStatus("idle");
     setDetail([]);
-    let receipt: Receipt;
-    try {
-      receipt = JSON.parse(receiptText) as Receipt;
-    } catch {
+    const receipt = parseReceipt();
+    if (!receipt) {
       setStatus("error");
       setDetail(["Receipt is not valid JSON."]);
       return;
@@ -34,7 +41,6 @@ export default function Verify() {
       // Recompute the chain from the original report + the receipt's salt/verdict.
       const reportHash = await computeReportHash(reportText);
       const reportId = await computeReportId(reportHash, receipt.salt);
-      const commitment = await computeCommitment(reportHash, receipt.verdict, receipt.salt);
 
       const checks: [string, boolean][] = [
         ["the report fingerprint matches", reportHash === receipt.reportHash],
@@ -42,8 +48,8 @@ export default function Verify() {
       ];
       const lines = checks.map(([k, v]) => `${v ? "✅" : "❌"} ${k}`);
       lines.push(
-        `ℹ️ recomputed fingerprint: ${commitment.slice(0, 24)}…`,
-        `ℹ️ The on-chain lookup isn't switched on yet. The checks above confirm this receipt matches the report you pasted.`,
+        "ℹ️ This confirms the receipt matches the report you pasted, entirely offline.",
+        "ℹ️ Use “Check on-chain” below to confirm it is actually recorded on the ledger.",
       );
 
       const allOk = checks.every(([, v]) => v);
@@ -55,13 +61,49 @@ export default function Verify() {
     }
   }
 
+  async function checkOnChain() {
+    setChainStatus("idle");
+    setChainDetail([]);
+    const receipt = parseReceipt();
+    if (!receipt) {
+      setChainStatus("error");
+      setChainDetail(["Receipt is not valid JSON."]);
+      return;
+    }
+    setChainBusy(true);
+    try {
+      // Dynamic import keeps the Midnight SDK/WASM out of the server-rendered graph.
+      const { readReceiptOnChain } = await import("@/midnight/verifyChain");
+      const res = await readReceiptOnChain(receipt, reportText);
+
+      const lines = [
+        `${res.found ? "✅" : "❌"} the receipt id is recorded in the registry`,
+        `${res.commitmentMatches ? "✅" : "❌"} the on-chain commitment matches this report`,
+      ];
+      if (res.total !== undefined) lines.push(`ℹ️ total audits certified by this registry: ${res.total}`);
+      lines.push(
+        `ℹ️ registry: ${receipt.registryAddress.slice(0, 18)}… on ${receipt.network}`,
+      );
+
+      const allOk = res.found && res.commitmentMatches;
+      setChainStatus(allOk ? "ok" : "fail");
+      setChainDetail(lines);
+    } catch (e) {
+      setChainStatus("error");
+      setChainDetail([e instanceof Error ? e.message : String(e)]);
+    } finally {
+      setChainBusy(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[900px] px-6 py-12">
       <BracketLabel>VERIFY · AUDIT RECEIPT</BracketLabel>
       <h1 className="mt-3 text-3xl font-semibold">Verify a receipt</h1>
       <p className="mt-3 max-w-2xl font-sans text-grid-text-2">
         Paste a receipt and the original report it points to. We check that they match, right here in
-        your browser. The report never leaves your device.
+        your browser, and can confirm the receipt is recorded on-chain. The report never leaves your
+        device.
       </p>
 
       <div className="mt-8 space-y-5">
@@ -86,9 +128,16 @@ export default function Verify() {
           />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button onClick={verify} disabled={!receiptText.trim() || !reportText.trim()}>
-            VERIFY →
+            VERIFY OFFLINE →
+          </Button>
+          <Button
+            variant="outline"
+            onClick={checkOnChain}
+            disabled={chainBusy || !receiptText.trim() || !reportText.trim()}
+          >
+            {chainBusy ? "CHECKING…" : "CHECK ON-CHAIN →"}
           </Button>
           <Link href="/audit">
             <Button variant="outline">BACK TO AUDIT</Button>
@@ -114,6 +163,29 @@ export default function Verify() {
             </p>
             <pre className="mt-3 whitespace-pre-wrap font-mono text-xs text-grid-text-2">
               {detail.join("\n")}
+            </pre>
+          </Card>
+        )}
+
+        {chainStatus !== "idle" && (
+          <Card>
+            <p
+              className={`font-mono text-sm ${
+                chainStatus === "ok"
+                  ? "text-sev-info"
+                  : chainStatus === "fail"
+                    ? "text-sev-critical"
+                    : "text-sev-medium"
+              }`}
+            >
+              {chainStatus === "ok"
+                ? "Confirmed on-chain: this receipt is recorded and matches the report."
+                : chainStatus === "fail"
+                  ? "Not confirmed on-chain (see details)."
+                  : "Could not reach the ledger."}
+            </p>
+            <pre className="mt-3 whitespace-pre-wrap font-mono text-xs text-grid-text-2">
+              {chainDetail.join("\n")}
             </pre>
           </Card>
         )}

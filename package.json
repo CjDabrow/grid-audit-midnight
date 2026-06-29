@@ -6,6 +6,8 @@
   "description": "Night Check: reviews Midnight Compact code for privacy and security bugs, then certifies the review on-chain with a privacy-preserving Compact contract.",
   "scripts": {
     "dev": "next dev -p 3010",
+    "check:contract": "node scripts/check-contract.mjs",
+    "prebuild": "node scripts/check-contract.mjs",
     "build": "next build",
     "start": "next start -p 3010",
     "lint": "next lint",

@@ -3,7 +3,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AuditResult } from "@/engine/types";
 import { REGISTRY_ADDRESS, NETWORK, CIRCUIT_ID, assertConfigured } from "./config";
-import { computeReportHash, computeReportId, genSalt, type Receipt } from "./receipt";
+import {
+  computeReportHash,
+  computeReportId,
+  computeReportFingerprint,
+  genSalt,
+  type Receipt,
+} from "./receipt";
 import { buildProviders } from "./providers";
 import type { WalletSession } from "./wallet";
 
@@ -64,7 +70,7 @@ export async function publishReceipt(
   const reportHash = await computeReportHash(reportJson);
   const reportId = await computeReportId(reportHash, salt); // public receipt key
   // The private report fingerprint - only its commitment is written on-chain.
-  const reportFingerprint = await sha256Bytes(reportJson + salt);
+  const reportFingerprint = await computeReportFingerprint(reportJson, salt);
 
   const providers = await buildProviders(session);
   const compiled = await buildCompiled(await auditorSecretBytes(), reportFingerprint);

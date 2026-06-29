@@ -15,6 +15,12 @@ export const WALLET_CONNECTOR_KEY = process.env.NEXT_PUBLIC_WALLET_KEY ?? "1am";
 // Where the compactc-generated zk keys are served (FetchZkConfigProvider base URL).
 export const ZK_BASE_URL = process.env.NEXT_PUBLIC_ZK_BASE_URL ?? "/zk";
 
+// Public indexer endpoint for read-only, wallet-less on-chain verification (the /verify
+// page queries the registry's receipts map directly). When a wallet is connected the dApp
+// uses the indexer from its 1AM config instead; these are the standalone fallbacks.
+export const INDEXER_URI = process.env.NEXT_PUBLIC_INDEXER_URI ?? "";
+export const INDEXER_WS_URI = process.env.NEXT_PUBLIC_INDEXER_WS_URI ?? "";
+
 // The circuit id in the compiled contract (used to key zk assets).
 export const CIRCUIT_ID = "publishReceipt";
 
