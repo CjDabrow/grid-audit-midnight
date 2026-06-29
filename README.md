@@ -166,8 +166,11 @@ with `npm run build`.)
 
 ## Notes
 
-- The contract is compiled **from source** by `npm run compile:contract`; the generated
-  module and zk keys are git-ignored (not committed as pre-built-only artifacts).
+- The contract is compiled **from source** by `npm run compile:contract`. The compiled
+  module and browser zk assets (`public/zk`) are committed so the Vercel deployment is
+  self-contained; the large Node-only prover key and the CLI copy stay git-ignored. The
+  `prebuild` guard (`scripts/check-contract.mjs`) fails the build if the compiled contract
+  is not the privacy-preserving design.
 - The auditor engine and the registry contract are original work.
 
 ## Credits
