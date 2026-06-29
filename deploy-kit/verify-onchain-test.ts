@@ -1,15 +1,16 @@
-// End-to-end demo of Night Check's core flow:
-//   1. REVIEW real Compact code with the auditor engine (tells you if it's good or not).
-//   2. CERTIFY that review on-chain: deploy the privacy registry and publish a receipt
-//      committing to the (private) report, proving the auditor's secret in-circuit.
-//   3. READ the certificate back from the ledger.
+// Round-trip test for the WEB /verify on-chain path against the live localnet.
 //
-// Run against the local standalone network (see localnet/). Uses the real Midnight SDK.
+// It publishes a receipt using the SAME scheme the web app uses (src/midnight/receipt.ts
+// + publish.ts), then independently recomputes the commitment the way src/midnight/
+// verifyChain.ts does (persistentHash(H(reportJson || salt))) and asserts it equals the
+// value actually stored on-chain. If this passes, the browser /verify "Check on-chain"
+// will return commitmentMatches=true for real receipts.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import "./config.mjs";
 import * as Rx from "rxjs";
 import * as ledger from "@midnight-ntwrk/ledger-v8";
 import { CompiledContract } from "@midnight-ntwrk/compact-js";
+import { persistentHash, CompactTypeBytes } from "@midnight-ntwrk/compact-runtime";
 import { deployContract, findDeployedContract } from "@midnight-ntwrk/midnight-js/contracts";
 import { NodeZkConfigProvider } from "@midnight-ntwrk/midnight-js-node-zk-config-provider";
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
@@ -17,80 +18,45 @@ import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-p
 import { levelPrivateStateProvider } from "@midnight-ntwrk/midnight-js-level-private-state-provider";
 import { Buffer } from "buffer";
 import { webcrypto } from "node:crypto";
-import { existsSync } from "node:fs";
 import { CFG, NETWORK } from "./config.mjs";
 import { buildWallet, unshieldedBalance } from "./wallet.mjs";
-import { runAudit } from "../src/engine/runAudit"; // the real reviewer (shared with the web app)
+import { runAudit } from "../src/engine/runAudit";
 import {
   computeReportHash,
   computeReportId,
   computeReportFingerprint,
   genSalt,
-  type Receipt,
-} from "../src/midnight/receipt"; // shared receipt scheme (interop with the web /verify page)
+} from "../src/midnight/receipt"; // the REAL web scheme - this test guards against drift
 
 const ZK_PATH = new URL("./managed/registry", import.meta.url).pathname;
-
-// Fail fast with a clear message if the contract has not been compiled yet.
-if (!existsSync(new URL("./managed/registry/contract/index.js", import.meta.url).pathname)) {
-  console.error(
-    "Contract not compiled. Run `npm run compile:contract` from the repo root first " +
-      "(it compiles src/contract/registry.compact and stages it into deploy-kit/managed).",
-  );
-  process.exit(1);
-}
 const Registry: any = await import("./managed/registry/contract/index.js");
-const enc = new TextEncoder();
-const sha256 = async (s: string): Promise<Uint8Array> =>
-  new Uint8Array(await webcrypto.subtle.digest("SHA-256", enc.encode(s)));
-const fromHex = (h: string): Uint8Array =>
-  new Uint8Array((h.match(/.{2}/g) ?? []).map((b) => parseInt(b, 16)));
 
-// ---- STEP 1: review real Compact code -------------------------------------------------
-// A user's contract with two real bugs the reviewer should catch:
-//   - withdraw() authorizes the caller with ownPublicKey() (a witness => spoofable)
-//   - castVote() discloses a hash of a low-entropy value (brute-forceable)
+const enc = new TextEncoder();
+const toHex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+const fromHex = (h: string) => new Uint8Array((h.match(/.{2}/g) ?? []).map((b) => parseInt(b, 16)));
+const sha256Bytes = async (s: string) => new Uint8Array(await webcrypto.subtle.digest("SHA-256", enc.encode(s)));
+const eqBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+// ---- build a realistic report exactly as the web app would --------------------------
 const USER_CONTRACT = `pragma language_version >= 0.23;
 import CompactStandardLibrary;
-
 export ledger owner: Bytes<32>;
-export ledger vote: Bytes<32>;
 witness userVote(): Field;
+export circuit withdraw(): [] { assert(ownPublicKey().bytes == owner, "not owner"); }`;
+const result = runAudit({ contractSource: USER_CONTRACT, contractFilename: "user.compact" });
+const reportJson = JSON.stringify(result);
 
-export circuit setOwner(): [] { owner = disclose(ownPublicKey().bytes); }
-
-export circuit withdraw(): [] {
-  assert(ownPublicKey().bytes == owner, "not owner");
-}
-
-export circuit castVote(): [] {
-  vote = disclose(persistentHash<Field>(userVote()));
-}`;
-
-const review = runAudit({ contractSource: USER_CONTRACT, contractFilename: "user-contract.compact" });
-const s = review.summary.bySeverity;
-const verdict = `C${s.CRITICAL}/H${s.HIGH}/M${s.MEDIUM}/L${s.LOW}/I${s.INFORMATIONAL}`;
-const passed = s.CRITICAL === 0 && s.HIGH === 0;
-
-console.log("=== STEP 1: reviewed user-contract.compact ===");
-console.log(`verdict: ${verdict}  (${passed ? "PASS" : "NEEDS WORK"})`);
-for (const f of review.findings) {
-  console.log(`  [${f.severity}] ${f.title}${f.line ? ` (line ${f.line})` : ""}`);
-}
-
-// ---- STEP 2+3: certify that review on-chain -------------------------------------------
-// The witnesses: the auditor's secret (gates publishing, never disclosed) and the private
-// report fingerprint (only its commitment is written on-chain). Receipt id + fingerprint use
-// the SAME scheme as the web app (src/midnight/receipt.ts), so a receipt published here can be
-// verified in the browser /verify page against the report JSON below.
-const AUDITOR_SECRET = await sha256("grid-auditor-secret-demo");
-const reportJson = JSON.stringify(review);
+// salt + ids via the shared web scheme (src/midnight/receipt.ts)
 const salt = genSalt();
 const reportHash = await computeReportHash(reportJson);
-const reportId = await computeReportId(reportHash, salt); // public receipt key (hex)
-const receiptId = fromHex(reportId); // on-chain map key (bytes)
-const reportFingerprint = await computeReportFingerprint(reportJson, salt);
+const reportId = await computeReportId(reportHash, salt); // on-chain key
+const reportFingerprint = await computeReportFingerprint(reportJson, salt); // witness
+const AUDITOR_SECRET = await sha256Bytes("night-check-operator"); // default NEXT_PUBLIC_AUDITOR_TAG
 
+console.log("=== publishing a web-scheme receipt to", NETWORK, "===");
+console.log("reportId:", reportId.slice(0, 24) + "…");
+
+// ---- provider plumbing (same as demo.ts) ----------------------------------------------
 const signTransactionIntents = (tx: any, signFn: any, marker: any) => {
   if (!tx.intents || tx.intents.size === 0) return;
   for (const seg of tx.intents.keys()) {
@@ -107,7 +73,6 @@ const signTransactionIntents = (tx: any, signFn: any, marker: any) => {
     tx.intents.set(seg, cloned);
   }
 };
-
 const walletAndMidnightProvider = async (ctx: any) => {
   const state = await Rx.firstValueFrom(ctx.wallet.state().pipe(Rx.filter((x: any) => x.isSynced)));
   return {
@@ -125,7 +90,6 @@ const walletAndMidnightProvider = async (ctx: any) => {
     submitTx: (tx: any) => ctx.wallet.submitTransaction(tx),
   };
 };
-
 const registerForDustGeneration = async (wallet: any, ks: any) => {
   const st = await Rx.firstValueFrom(wallet.state().pipe(Rx.filter((x: any) => x.isSynced)));
   if (st.dust.balance(new Date()) > 0n) return;
@@ -136,14 +100,13 @@ const registerForDustGeneration = async (wallet: any, ks: any) => {
   }
   await Rx.firstValueFrom(wallet.state().pipe(Rx.throttleTime(3000), Rx.filter((x: any) => x.isSynced), Rx.filter((x: any) => x.dust.balance(new Date()) > 0n)));
 };
-
 const configureProviders = async (ctx: any) => {
   const wmp = await walletAndMidnightProvider(ctx);
   const zk = new NodeZkConfigProvider(ZK_PATH);
   const accountId = wmp.getCoinPublicKey();
   const pw = `${Buffer.from(accountId, "hex").toString("base64")}!`;
   return {
-    privateStateProvider: levelPrivateStateProvider({ privateStateStoreName: "grid-pstate", accountId, privateStoragePasswordProvider: () => pw } as any),
+    privateStateProvider: levelPrivateStateProvider({ privateStateStoreName: "verify-pstate", accountId, privateStoragePasswordProvider: () => pw } as any),
     publicDataProvider: indexerPublicDataProvider(CFG.indexer, CFG.indexerWS),
     zkConfigProvider: zk,
     proofProvider: httpClientProofProvider(CFG.proofServer, zk as any),
@@ -152,13 +115,12 @@ const configureProviders = async (ctx: any) => {
   } as any;
 };
 
-console.log("\n=== STEP 2: certify the review on-chain (network:", NETWORK + ") ===");
 const ctx = await buildWallet("0000000000000000000000000000000000000000000000000000000000000001");
 await Rx.firstValueFrom(ctx.wallet.state().pipe(Rx.filter((x: any) => x.isSynced), Rx.filter((x: any) => unshieldedBalance(x) > 0n)));
 await registerForDustGeneration(ctx.wallet, ctx.unshieldedKeystore);
 const providers = await configureProviders(ctx);
 
-const make: any = CompiledContract.make("registry", (Registry as any).Contract);
+const make: any = CompiledContract.make("registry", Registry.Contract);
 const compiled = make.pipe(
   (CompiledContract.withWitnesses as any)({
     auditorSecret: (w: any) => [w.privateState, AUDITOR_SECRET],
@@ -169,29 +131,25 @@ const compiled = make.pipe(
 
 const deployed: any = await deployContract(providers, { compiledContract: compiled, args: [] } as any);
 const addr = deployed.deployTxData.public.contractAddress;
-console.log("registry deployed at:", addr);
-const tx: any = await deployed.callTx.publishReceipt(receiptId);
-console.log("receipt published, tx:", tx?.public?.txId ?? tx?.public?.txHash);
+await deployed.callTx.publishReceipt(fromHex(reportId));
+console.log("published to registry:", addr.slice(0, 24) + "…");
 
-console.log("\n=== STEP 3: read the certificate back from the ledger ===");
+// ---- now do EXACTLY what src/midnight/verifyChain.ts does -----------------------------
+console.log("\n=== verifying on-chain the way the web /verify page does ===");
 const cs: any = await providers.publicDataProvider.queryContractState(addr);
-const led: any = (Registry as any).ledger(cs.data);
-console.log("receipt on-chain for this contract:", led.receipts.member(receiptId));
-console.log("total certified audits:", led.published.toString());
+const led: any = Registry.ledger(cs.data);
+const key = fromHex(reportId);
 
-// Emit a self-contained receipt + the report it attests to. Paste both into the web /verify
-// page ("Check on-chain") to confirm the same receipt against the live ledger.
-const receipt: Receipt = {
-  reportId,
-  reportHash,
-  verdict,
-  salt,
-  network: NETWORK,
-  registryAddress: addr,
-  txHash: tx?.public?.txId ?? tx?.public?.txHash,
-};
-console.log("\n=== receipt JSON (paste into /verify) ===");
-console.log(JSON.stringify(receipt));
-console.log("\n=== report JSON (the AuditResult the receipt attests to) ===");
-console.log(reportJson);
-process.exit(0);
+const found = led.receipts.member(key);
+const stored: Uint8Array = led.receipts.lookup(key);
+const expected = (persistentHash as any)(new (CompactTypeBytes as any)(32), reportFingerprint);
+
+console.log(`found receiptId on-chain:        ${found}`);
+console.log(`stored commitment:               ${toHex(stored).slice(0, 24)}…`);
+console.log(`recomputed (verifyChain scheme): ${toHex(expected).slice(0, 24)}…`);
+console.log(`commitmentMatches:               ${eqBytes(stored, expected)}`);
+console.log(`total certified:                 ${led.published.toString()}`);
+
+const ok = found && eqBytes(stored, expected);
+console.log(`\n${ok ? "✅ PASS" : "❌ FAIL"}: web /verify on-chain logic round-trips against the live ledger`);
+process.exit(ok ? 0 : 1);
